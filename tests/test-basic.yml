@@ -1,0 +1,67 @@
+name: Test basic usage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create a valid workflow file to lint
+        run: |
+          mkdir -p /tmp/test-workflows/.github/workflows
+          cat > /tmp/test-workflows/.github/workflows/valid.yml << 'EOF'
+          name: Valid Workflow
+          on:
+            push:
+              branches:
+                - main
+          jobs:
+            build:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+                - name: Say hello
+                  run: echo "Hello, World!"
+          EOF
+
+      - id: action
+        uses: .
+        with:
+          files: /tmp/test-workflows/.github/workflows/valid.yml
+          shellcheck: "false"
+          pyflakes: "false"
+          cache: "false"
+
+      - name: Assert exit-code is 0
+        env:
+          ACTUAL: ${{ steps.action.outputs.exit-code }}
+        run: |
+          echo "actual exit-code: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected exit-code '0', got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert version-semver is set
+        env:
+          ACTUAL: ${{ steps.action.outputs.version-semver }}
+        run: |
+          echo "actual version-semver: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: expected version-semver to be non-empty"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert version-tag is set
+        env:
+          ACTUAL: ${{ steps.action.outputs.version-tag }}
+        run: |
+          echo "actual version-tag: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: expected version-tag to be non-empty"
+            exit 1
+          fi
+          echo "PASS"

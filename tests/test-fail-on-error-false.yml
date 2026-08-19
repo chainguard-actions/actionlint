@@ -1,0 +1,54 @@
+name: Test fail-on-error disabled
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create an invalid workflow file to lint
+        run: |
+          mkdir -p /tmp/test-invalid/.github/workflows
+          cat > /tmp/test-invalid/.github/workflows/invalid.yml << 'EOF'
+          name: Invalid Workflow
+          on: push
+          jobs:
+            build:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Bad step
+                  run: echo "hello"
+                  uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+          EOF
+
+      - id: action
+        uses: .
+        with:
+          files: /tmp/test-invalid/.github/workflows/invalid.yml
+          fail-on-error: "false"
+          shellcheck: "false"
+          pyflakes: "false"
+          cache: "false"
+
+      - name: Assert exit-code is non-zero (errors found)
+        env:
+          ACTUAL: ${{ steps.action.outputs.exit-code }}
+        run: |
+          echo "actual exit-code: $ACTUAL"
+          if [ "$ACTUAL" = "0" ]; then
+            echo "FAIL: expected non-zero exit-code since workflow has errors"
+            exit 1
+          fi
+          echo "PASS: exit-code is $ACTUAL (non-zero as expected)"
+
+      - name: Assert exit-message is set
+        env:
+          ACTUAL: ${{ steps.action.outputs.exit-message }}
+        run: |
+          echo "actual exit-message: $ACTUAL"
+          if [ -z "$ACTUAL" ]; then
+            echo "FAIL: expected exit-message to be non-empty"
+            exit 1
+          fi
+          echo "PASS"

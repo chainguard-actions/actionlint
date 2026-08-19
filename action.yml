@@ -1,0 +1,523 @@
+# yaml-language-server: $schema=https://www.schemastore.org/github-action.json
+# https://docs.github.com/en/actions/creating-actions/metadata-syntax-for-github-actions
+name: actionlint
+description: ✅ Run actionlint for validating your GitHub Actions workflow files.
+author: Dariusz Porowski
+branding:
+  icon: check-circle
+  color: gray-dark
+inputs:
+  version:
+    description: actionlint semver version
+    required: false
+    default: latest
+  matcher:
+    description: Use matcher
+    required: false
+    default: ${{ true }}
+  files:
+    description: Glob pattern list of files to check
+    required: false
+    default: ${{ null }}
+  flags:
+    description: Extra flags for the actionlint
+    required: false
+    default: ${{ null }}
+  json:
+    description: JSON file output and upload to artifacts
+    required: false
+    default: ${{ false }}
+  shellcheck:
+    description: Use shellcheck
+    required: false
+    default: ${{ true }}
+  pyflakes:
+    description: Use pyflakes
+    required: false
+    default: ${{ true }}
+  fail-on-error:
+    description: Fail on error
+    required: false
+    default: ${{ true }}
+  group-result:
+    description: Group result
+    required: false
+    default: ${{ true }}
+  cache:
+    description: Cache tool
+    required: false
+    default: ${{ true }}
+  working-directory:
+    description: Working directory
+    required: false
+    default: ${{ github.workspace }}
+  token:
+    description: GitHub Token
+    required: false
+    default: ${{ github.token }}
+    deprecationMessage: Use `github-token` input instead
+  github-token:
+    description: GitHub Token
+    required: false
+    default: ${{ github.token }}
+  github-server-url:
+    description: GitHub server to download the actionlint tool from. Defaults to public github.com so the external rhysd/actionlint tool is always found; override only if you mirror rhysd/actionlint on your GHES, e.g. https://ghes.example.com
+    required: false
+    default: https://github.com
+outputs:
+  version-semver:
+    description: SemVer version
+    value: ${{ steps.environment.outputs.tool-version-semver }}
+  version-tag:
+    description: Tag version
+    value: ${{ steps.environment.outputs.tool-version-tag }}
+  exit-code:
+    description: Exit code
+    value: ${{ steps.tool-runner.outputs.exit-code }}
+  exit-message:
+    description: Exit message
+    value: ${{ steps.tool-runner.outputs.exit-message }}
+  total-errors:
+    description: Total errors
+    value: ${{ steps.tool-runner.outputs.total-errors }}
+  total-files:
+    description: Linted files
+    value: ${{ steps.tool-runner.outputs.total-files }}
+  cache-hit:
+    description: Cache hit
+    value: ${{ steps.tool-cache.outputs.cache-hit || false }}
+runs:
+  using: composite
+  steps:
+    - name: Chainguard usage telemetry
+      shell: bash
+      run: |
+        # Best-effort, fails open. Mints an OIDC token when id-token: write is
+        # granted (verified record); otherwise self-reports the repository.
+        tok=""
+        if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+          tok=$(curl -sf --max-time 2 \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=actions.chainguard.dev" \
+            | sed -n 's/.*"value":"\([^"]*\)".*/\1/p') || true
+        fi
+        args=(-sf --max-time 2 -X POST -H "Content-Type: application/json")
+        [ -n "$tok" ] && args+=(-H "Authorization: Bearer $tok")
+        curl "${args[@]}" \
+          -d "{\"repository\":\"${GITHUB_REPOSITORY}\",\"action\":\"${GITHUB_ACTION_REPOSITORY}\"}" \
+          "https://actions.enforce.dev/actions/v1/record" >/dev/null 2>&1 || true
+    - name: Set tool environment
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      id: environment
+      with:
+        github-token: ${{ inputs.github-token || inputs.token || env.GITHUB_TOKEN }}
+        script: |
+          // input envs
+          const { INPUT_TOOL_NAME, INPUT_TOOL_SEMVER, INPUT_REPO_OWNER, INPUT_REPO_NAME, INPUT_GITHUB_SERVER_URL, RUNNER_TEMP } = process.env
+
+          // define tool platform and arch
+          const processPlatform = process.platform // https://nodejs.org/api/process.html#processplatform
+          const processArch = process.arch // https://nodejs.org/api/process.html#processarch
+
+          let toolOs = ''
+          let toolArch = ''
+          let toolExt = ''
+          let toolExecutable = `${INPUT_TOOL_NAME}`
+
+          switch (processPlatform) {
+            case 'darwin':
+              toolOs = 'darwin'
+              toolExt = 'tar.gz'
+              break;
+            case 'freebsd':
+              toolOs = 'freebsd'
+              toolExt = 'tar.gz'
+              break;
+            case 'linux':
+              toolOs = 'linux'
+              toolExt = 'tar.gz'
+              break;
+            case 'win32':
+              toolOs = 'windows'
+              toolExt = 'zip'
+              toolExecutable = `${INPUT_TOOL_NAME}.exe`
+              break;
+            default:
+              core.setFailed(`[${INPUT_TOOL_NAME}] Unsupported platform: ${processPlatform}`)
+              process.exit(core.ExitCode.Failure)
+          }
+
+          switch (processArch) {
+            case 'x64':
+              toolArch = 'amd64'
+              break;
+            case 'arm64':
+              toolArch = 'arm64'
+              break;
+            case 'arm':
+              toolArch = 'armv6'
+              break;
+            case 'ia32':
+              toolArch = '386'
+              break;
+            default:
+              core.setFailed(`[${INPUT_TOOL_NAME}] Unsupported architecture: ${processArch}`)
+              process.exit(core.ExitCode.Failure)
+          }
+
+          // GitHub server to fetch the tool from (defaults to public github.com so the external
+          // rhysd/actionlint tool is always found; override via github-server-url for a GHES mirror)
+          const serverUrl = (INPUT_GITHUB_SERVER_URL || 'https://github.com').replace(/\/+$/, '')
+          const apiBaseUrl = serverUrl === 'https://github.com' ? 'https://api.github.com' : `${serverUrl}/api/v3`
+          const rawBaseUrl = serverUrl === 'https://github.com' ? 'https://raw.githubusercontent.com' : `${serverUrl}/raw`
+
+          // resolve the release tag while avoiding GitHub API calls where possible
+          // (REST calls count against the GITHUB_TOKEN rate limit, which busy CI can exhaust)
+          const isLatest = !INPUT_TOOL_SEMVER || INPUT_TOOL_SEMVER === 'latest'
+
+          // discover the latest tag by following the redirect on the releases/latest page (no API call)
+          async function getLatestTagFromRedirect() {
+            const https = await import('node:https')
+            return await new Promise((resolve, reject) => {
+              const request = https.get(
+                `${serverUrl}/${INPUT_REPO_OWNER}/${INPUT_REPO_NAME}/releases/latest`,
+                { headers: { 'user-agent': INPUT_TOOL_NAME } },
+                (res) => {
+                  res.resume() // drain the response so the socket can close
+                  const location = res.headers['location']
+                  if (res.statusCode >= 300 && res.statusCode < 400 && location) {
+                    resolve(location.split('/').pop().trim())
+                  } else {
+                    reject(new Error(`unexpected response (status: ${res.statusCode})`))
+                  }
+                }
+              )
+              request.setTimeout(10000, () => request.destroy(new Error('request timed out')))
+              request.on('error', reject)
+            })
+          }
+
+          // proxy-aware fallback via the authenticated client; only used if the redirect approach fails
+          async function getLatestTagFromApi() {
+            const response = await github.request('GET /repos/{owner}/{repo}/releases/latest', {
+              owner: INPUT_REPO_OWNER,
+              repo: INPUT_REPO_NAME,
+              baseUrl: apiBaseUrl
+            })
+            return response.data.tag_name
+          }
+
+          let versionTag
+          if (isLatest) {
+            try {
+              versionTag = await getLatestTagFromRedirect()
+            } catch (err) {
+              core.debug(`[${INPUT_TOOL_NAME}] latest-release redirect failed (${err.message}); falling back to GitHub API`)
+              versionTag = await getLatestTagFromApi()
+            }
+          } else {
+            // pinned version: build the tag directly, no network call needed
+            versionTag = `v${INPUT_TOOL_SEMVER.replace(/^v/, '')}`
+          }
+
+          const versionSemVer = versionTag.replace(/^v/, '')
+          const toolDirPath = core.toPlatformPath(`${RUNNER_TEMP}/${INPUT_TOOL_NAME}-${versionSemVer}`)
+          const toolDownloadUrl = `${serverUrl}/${INPUT_REPO_OWNER}/${INPUT_REPO_NAME}/releases/download/${versionTag}/${INPUT_TOOL_NAME}_${versionSemVer}_${toolOs}_${toolArch}.${toolExt}`
+          const matcherDownloadUrl = `${rawBaseUrl}/${INPUT_REPO_OWNER}/${INPUT_REPO_NAME}/${versionTag}/.github/actionlint-matcher.json`
+          const matcherPath = core.toPlatformPath(`${toolDirPath}/actionlint-matcher.json`)
+
+          // set outputs
+          core.setOutput('tool-name', INPUT_TOOL_NAME)
+          core.setOutput('tool-version-semver', versionSemVer)
+          core.setOutput('tool-version-tag', versionTag)
+          core.setOutput('tool-dir-path', toolDirPath)
+          core.setOutput('tool-download-url', toolDownloadUrl)
+          core.setOutput('matcher-download-url', matcherDownloadUrl)
+          core.setOutput('matcher-path', matcherPath)
+          core.setOutput('tool-executable', toolExecutable)
+          core.setOutput('tool-executable-path', core.toPlatformPath(`${toolDirPath}/${toolExecutable}`))
+      env:
+        INPUT_TOOL_NAME: "actionlint"
+        INPUT_REPO_OWNER: "rhysd"
+        INPUT_REPO_NAME: "actionlint"
+        INPUT_TOOL_SEMVER: ${{ inputs.version }}
+        INPUT_GITHUB_SERVER_URL: ${{ inputs.github-server-url }}
+    - name: Set cache
+      if: ${{ inputs.cache == 'true' }}
+      id: tool-cache
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: ${{ steps.environment.outputs.tool-dir-path }}
+        key: ${{ format('{0}-{1}-{2}-{3}', steps.environment.outputs.tool-name, steps.environment.outputs.tool-version-semver, runner.os, runner.arch) }}
+    - name: Install dependencies
+      if: ${{ steps.tool-cache.outputs.cache-hit != 'true' }}
+      run: npm install --prefix "$RUNNER_TEMP/actionlint-action" --no-save --no-package-lock --no-audit --no-fund --ignore-scripts --legacy-peer-deps @actions/tool-cache@4.0.0
+      shell: ${{ (runner.os == 'Windows' && 'pwsh') || 'bash' }}
+      working-directory: ${{ inputs.working-directory }}
+    - name: Download tool
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      if: ${{ steps.tool-cache.outputs.cache-hit != 'true' }}
+      with:
+        github-token: ${{ inputs.github-token || inputs.token || env.GITHUB_TOKEN }}
+        script: |
+          // dependencies
+          // @actions/tool-cache v4 is a pure-ESM package installed into an isolated RUNNER_TEMP dir, so it
+          // neither pollutes nor is affected by the user's workspace node_modules; github-script evaluates
+          // this inline script in a non-module context where bare specifiers can't be resolved, so import
+          // it directly via its file URL
+          const { pathToFileURL } = await import('node:url')
+          const { join } = await import('node:path')
+          const toolCacheEntry = join(process.env.RUNNER_TEMP, 'actionlint-action', 'node_modules', '@actions', 'tool-cache', 'lib', 'tool-cache.js')
+          const tc = await import(pathToFileURL(toolCacheEntry).href)
+
+          // input envs
+          const { INPUT_TOOL_NAME, INPUT_TOOL_DIR_PATH, INPUT_TOOL_DOWNLOAD_URL, INPUT_MATCHER_DOWNLOAD_URL, INPUT_MATCHER_PATH } = process.env
+
+          // download tool
+          await io.mkdirP(INPUT_TOOL_DIR_PATH)
+          let toolTempPath
+          try {
+            toolTempPath = await tc.downloadTool(INPUT_TOOL_DOWNLOAD_URL)
+          } catch (err) {
+            if (err && err.httpStatusCode === 404) {
+              core.setFailed(`[${INPUT_TOOL_NAME}] Release asset not found (HTTP 404) - check the 'version' input points to a published release: ${INPUT_TOOL_DOWNLOAD_URL}`)
+              process.exit(core.ExitCode.Failure)
+            }
+            throw err
+          }
+
+          // extract tool
+          if (INPUT_TOOL_DOWNLOAD_URL.endsWith('.zip')) {
+            await tc.extractZip(toolTempPath, INPUT_TOOL_DIR_PATH)
+          } else if (INPUT_TOOL_DOWNLOAD_URL.endsWith('.tar.gz')) {
+            await tc.extractTar(toolTempPath, INPUT_TOOL_DIR_PATH)
+          } else {
+            core.setFailed(`[${INPUT_TOOL_NAME}] Unsupported format`)
+            process.exit(core.ExitCode.Failure)
+          }
+
+          // download matcher
+          const matcherTempPath = await tc.downloadTool(INPUT_MATCHER_DOWNLOAD_URL)
+          await io.cp(matcherTempPath, INPUT_MATCHER_PATH, { force: true })
+      env:
+        INPUT_TOOL_NAME: ${{ steps.environment.outputs.tool-name }}
+        INPUT_TOOL_DIR_PATH: ${{ steps.environment.outputs.tool-dir-path }}
+        INPUT_TOOL_DOWNLOAD_URL: ${{ steps.environment.outputs.tool-download-url }}
+        INPUT_MATCHER_DOWNLOAD_URL: ${{ steps.environment.outputs.matcher-download-url }}
+        INPUT_MATCHER_PATH: ${{ steps.environment.outputs.matcher-path }}
+    - name: Install tool dependencies
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      if: ${{ inputs.pyflakes == 'true' || inputs.shellcheck == 'true' }}
+      id: tool-dependencies
+      with:
+        github-token: ${{ inputs.github-token || inputs.token || env.GITHUB_TOKEN }}
+        script: |
+          // input envs
+          const { INPUT_PYFLAKES, INPUT_SHELLCHECK } = process.env
+
+          // helpers
+          async function checkTool(toolBinary) {
+            try {
+              const toolPath = await io.which(toolBinary, true)
+              core.debug(`${toolBinary} path: ${toolPath}`)
+              return true
+            } catch (err) {
+              return false
+            }
+          }
+
+          // pyflakes
+          if (INPUT_PYFLAKES === 'true') {
+            let pyflakesBinary = 'pyflakes'
+            if (process.platform === 'win32') {
+              pyflakesBinary = 'pyflakes.exe'
+            }
+            const pyflakesExists = await checkTool(pyflakesBinary)
+            core.debug(`${pyflakesBinary} exists: ${pyflakesExists}`)
+
+            if (pyflakesExists === false) {
+              await exec.exec('pipx', ['install', 'pyflakes'])
+            }
+          }
+
+          // shellcheck
+          if (INPUT_SHELLCHECK === 'true') {
+            let shellcheckBinary = 'shellcheck'
+            if (process.platform === 'win32') {
+              shellcheckBinary = 'shellcheck.exe'
+            }
+            const shellcheckExists = await checkTool(shellcheckBinary)
+            core.debug(`${shellcheckBinary} exists: ${shellcheckExists}`)
+            if (shellcheckExists === false) {
+              switch (process.platform) {
+                case 'darwin':
+                  await exec.exec('brew', ['install',  'shellcheck'])
+                  break;
+                case 'linux':
+                  core.exportVariable('DEBIAN_FRONTEND', 'noninteractive')
+                  await exec.exec('sudo apt-get update')
+                  await exec.exec('sudo apt-get install shellcheck')
+                  break;
+                case 'win32':
+                  await exec.exec('choco', ['install', 'shellcheck'])
+                  break;
+                default:
+                  core.setFailed(`[shellcheck] Unsupported platform: ${process.platform}`)
+                  process.exit(core.ExitCode.Failure)
+              }
+            }
+          }
+      env:
+        INPUT_PYFLAKES: ${{ inputs.pyflakes }}
+        INPUT_SHELLCHECK: ${{ inputs.shellcheck }}
+    - name: Run tool
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      id: tool-runner
+      with:
+        github-token: ${{ inputs.github-token || inputs.token || env.GITHUB_TOKEN }}
+        script: |
+          // input envs
+          const { INPUT_FILES, INPUT_FLAGS, INPUT_TOOL_NAME, INPUT_TOOL_DIR_PATH, INPUT_MATCHER, INPUT_MATCHER_PATH, INPUT_TOOL_EXECUTABLE, INPUT_JSON, INPUT_FAIL_ON_ERROR, INPUT_PYFLAKES, INPUT_SHELLCHECK, INPUT_GROUP_RESULT, DEBUG } = process.env
+
+          // helpers
+          function niceHeader(label, color, emoji, group = false) {
+            const colors = {
+              red: '\x1b[31m',
+              green: '\x1b[32m',
+              yellow: '\x1b[33m',
+              blue: '\x1b[34m'
+            }
+            const emojis = {
+              arrowDown: '⬇️',
+              warning: '⚠️',
+              error: '❌',
+              check: '✅'
+            }
+            const reset = '\x1b[0m'
+
+            let expand = ''
+            if (group) {
+              expand = ' expand for details...'
+            }
+
+            return `${colors[color]}${emojis[emoji]} [${INPUT_TOOL_NAME}] ${label}${reset}${expand}`
+          }
+
+          // set search path
+          core.addPath(INPUT_TOOL_DIR_PATH)
+
+          // set matcher
+          if (INPUT_MATCHER === 'true') {
+            core.info(`##[add-matcher]${INPUT_MATCHER_PATH}`)
+          }
+
+          // set default tool flags
+          const toolFlags = ['-verbose']
+          if(DEBUG === 'true') {
+            toolFlags.push('-debug')
+          }
+          if(INPUT_PYFLAKES === 'false') {
+            toolFlags.push('-pyflakes', '')
+          }
+          if(INPUT_SHELLCHECK === 'false') {
+            toolFlags.push('-shellcheck', '')
+          }
+
+          // set user tool flags
+          if(INPUT_FLAGS !== '') {
+            const userFlags = INPUT_FLAGS.match(/(?:[^\s"]+|"[^"]*")+/g)
+            userFlags.forEach(flag => {
+              toolFlags.push(flag.trim())
+            })
+          }
+
+          // set files
+          if(INPUT_FILES !== '') {
+            const patterns = INPUT_FILES.split(',').map(s => s.trim()).join('\n')
+            const globber = await glob.create(patterns)
+            let files = await globber.glob()
+            files = files.map(p => core.toPlatformPath(p))
+            files.forEach(file => { toolFlags.push(file) })
+          }
+
+          // run tool
+          const { exitCode, stdout, stderr } = await exec.getExecOutput(INPUT_TOOL_EXECUTABLE, toolFlags, { silent: true, ignoreReturnCode: true })
+
+          //if (INPUT_JSON === 'true') {
+          //  const fs = await import('node:fs')
+          //   const path = await import('node:path')
+          //   const jsonPath = path.join(process.env.GITHUB_WORKSPACE, 'actionlint.json')
+          //   fs.writeFileSync(jsonPath, stdout)
+          //   core.info(`##[add-annotation]file=${jsonPath},title=actionlint.json`)
+          // }
+
+          let exitMessage = ''
+          switch (exitCode) {
+            case 1:
+              exitMessage = 'The command ran successfully and no problem was found'
+              exitMessage = 'The command ran successfully and some problem was found'
+              break;
+            case 2:
+              exitMessage = 'The command failed due to invalid command line option'
+              break;
+            case 3:
+              exitMessage = 'The command failed due to some fatal error'
+              break;
+            default:
+              exitMessage = 'The command ran successfully and no problem was found'
+          }
+          core.setOutput('exit-code', exitCode)
+          core.setOutput('exit-message', exitMessage)
+          core.debug(`[${INPUT_TOOL_NAME}] ${exitMessage} (exit code: ${exitCode})`)
+
+          if (exitCode !== 0) {
+            if (INPUT_GROUP_RESULT === 'true') {
+              await core.group(niceHeader(`Results`, 'red', 'error', true), async () => {
+                core.info(`${stdout.trim()}`)
+              })
+            } else {
+              core.info(niceHeader(`Results`, 'red', 'error'))
+              core.info(`${stdout.trim()}`)
+            }
+          }
+
+          const outputVerbose = stderr.trim()
+          await core.group(niceHeader(`Verbose`, 'blue', 'arrowDown', true), async () => {
+            core.info(`${outputVerbose}`)
+          })
+
+          const matchErrors = outputVerbose.match(/Found (\d+) errors in (\d+) files/)
+          const totalErrors = matchErrors ? matchErrors[1] : 0
+          const totalFiles = matchErrors ? matchErrors[2] : 0
+
+          core.setOutput('total-errors', totalErrors)
+          core.setOutput('total-files', totalFiles)
+
+          switch (exitCode) {
+            case 0:
+              core.info(niceHeader(`${exitMessage} (linted ${totalFiles} files)`, 'green', 'check'))
+              process.exit(core.ExitCode.Success)
+              break;
+            default:
+              if (INPUT_FAIL_ON_ERROR === 'true') {
+                core.setFailed(niceHeader(`${exitMessage} (found ${totalErrors} errors, linted ${totalFiles} files), exit code: ${exitCode}`, 'red', 'error'))
+                process.exit(core.ExitCode.Failure)
+              }
+              else {
+                core.warning(niceHeader(`${exitMessage} (found ${totalErrors} errors, linted ${totalFiles} files), exit code: ${exitCode}`, 'yellow', 'warning'))
+                process.exit(core.ExitCode.Success)
+              }
+          }
+      env:
+        INPUT_TOOL_NAME: ${{ steps.environment.outputs.tool-name }}
+        INPUT_TOOL_DIR_PATH: ${{ steps.environment.outputs.tool-dir-path }}
+        INPUT_TOOL_EXECUTABLE: ${{ steps.environment.outputs.tool-executable }}
+        INPUT_MATCHER: ${{ inputs.matcher }}
+        INPUT_MATCHER_PATH: ${{ steps.environment.outputs.matcher-path }}
+        INPUT_JSON: ${{ inputs.json }}
+        INPUT_FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
+        INPUT_PYFLAKES: ${{ inputs.pyflakes }}
+        INPUT_SHELLCHECK: ${{ inputs.shellcheck }}
+        INPUT_FILES: ${{ inputs.files }}
+        INPUT_FLAGS: ${{ inputs.flags }}
+        INPUT_GROUP_RESULT: ${{ inputs.group-result }}

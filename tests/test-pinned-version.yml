@@ -1,0 +1,68 @@
+name: Test pinned version
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create a valid workflow file to lint
+        run: |
+          mkdir -p /tmp/test-pinned/.github/workflows
+          cat > /tmp/test-pinned/.github/workflows/simple.yml << 'EOF'
+          name: Simple Workflow
+          on:
+            push:
+              branches:
+                - main
+          jobs:
+            build:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+                - name: Run something
+                  run: echo "done"
+          EOF
+
+      - id: action
+        uses: .
+        with:
+          version: "1.7.7"
+          files: /tmp/test-pinned/.github/workflows/simple.yml
+          shellcheck: "false"
+          pyflakes: "false"
+          cache: "false"
+
+      - name: Assert version-semver matches pinned version
+        env:
+          ACTUAL: ${{ steps.action.outputs.version-semver }}
+        run: |
+          echo "actual version-semver: $ACTUAL"
+          if [ "$ACTUAL" != "1.7.7" ]; then
+            echo "FAIL: expected version-semver '1.7.7', got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert version-tag matches pinned version
+        env:
+          ACTUAL: ${{ steps.action.outputs.version-tag }}
+        run: |
+          echo "actual version-tag: $ACTUAL"
+          if [ "$ACTUAL" != "v1.7.7" ]; then
+            echo "FAIL: expected version-tag 'v1.7.7', got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert exit-code is 0
+        env:
+          ACTUAL: ${{ steps.action.outputs.exit-code }}
+        run: |
+          echo "actual exit-code: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected exit-code '0', got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"

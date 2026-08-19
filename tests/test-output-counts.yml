@@ -1,0 +1,81 @@
+name: Test output counts
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create valid workflow files to lint
+        run: |
+          mkdir -p /tmp/test-counts/.github/workflows
+          cat > /tmp/test-counts/.github/workflows/workflow1.yml << 'EOF'
+          name: Workflow One
+          on:
+            push:
+              branches:
+                - main
+          jobs:
+            build:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+                - name: Step one
+                  run: echo "one"
+          EOF
+          cat > /tmp/test-counts/.github/workflows/workflow2.yml << 'EOF'
+          name: Workflow Two
+          on:
+            push:
+              branches:
+                - main
+          jobs:
+            test:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+                - name: Step two
+                  run: echo "two"
+          EOF
+
+      - id: action
+        uses: .
+        with:
+          files: /tmp/test-counts/.github/workflows/workflow1.yml,/tmp/test-counts/.github/workflows/workflow2.yml
+          shellcheck: "false"
+          pyflakes: "false"
+          cache: "false"
+
+      - name: Assert exit-code is 0
+        env:
+          ACTUAL: ${{ steps.action.outputs.exit-code }}
+        run: |
+          echo "actual exit-code: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected exit-code '0', got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert total-errors is 0
+        env:
+          ACTUAL: ${{ steps.action.outputs.total-errors }}
+        run: |
+          echo "actual total-errors: $ACTUAL"
+          if [ "$ACTUAL" != "0" ]; then
+            echo "FAIL: expected total-errors '0', got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Assert total-files is 2
+        env:
+          ACTUAL: ${{ steps.action.outputs.total-files }}
+        run: |
+          echo "actual total-files: $ACTUAL"
+          if [ "$ACTUAL" != "2" ]; then
+            echo "FAIL: expected total-files '2', got '$ACTUAL'"
+            exit 1
+          fi
+          echo "PASS"
