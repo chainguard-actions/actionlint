@@ -1,0 +1,60 @@
+name: Test basic usage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          shellcheck: "false"
+          pyflakes: "false"
+          fail-on-error: "true"
+          files: "tests/fixtures/workflows/valid.yml"
+
+      - name: Assert version-semver is set
+        env:
+          VERSION: ${{ steps.action.outputs.version-semver }}
+        run: |
+          echo "version-semver: $VERSION"
+          if [ -z "$VERSION" ]; then
+            echo "FAIL: version-semver output is empty"
+            exit 1
+          fi
+          echo "PASS: version-semver=$VERSION"
+
+      - name: Assert version-tag is set
+        env:
+          TAG: ${{ steps.action.outputs.version-tag }}
+        run: |
+          echo "version-tag: $TAG"
+          if [ -z "$TAG" ]; then
+            echo "FAIL: version-tag output is empty"
+            exit 1
+          fi
+          echo "PASS: version-tag=$TAG"
+
+      - name: Assert exit-code is 0
+        env:
+          EXIT_CODE: ${{ steps.action.outputs.exit-code }}
+        run: |
+          echo "exit-code: $EXIT_CODE"
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "FAIL: expected exit-code 0, got $EXIT_CODE"
+            exit 1
+          fi
+          echo "PASS: exit-code=0"
+
+      - name: Assert total-errors is 0
+        env:
+          TOTAL_ERRORS: ${{ steps.action.outputs.total-errors }}
+        run: |
+          echo "total-errors: $TOTAL_ERRORS"
+          if [ "$TOTAL_ERRORS" != "0" ]; then
+            echo "FAIL: expected 0 errors, got $TOTAL_ERRORS"
+            exit 1
+          fi
+          echo "PASS: total-errors=0"

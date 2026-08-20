@@ -1,0 +1,50 @@
+name: Test specific version input
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          version: "1.7.4"
+          shellcheck: "false"
+          pyflakes: "false"
+          fail-on-error: "true"
+          files: "tests/fixtures/workflows/valid.yml"
+
+      - name: Assert version-semver matches requested version
+        env:
+          VERSION: ${{ steps.action.outputs.version-semver }}
+        run: |
+          echo "version-semver: $VERSION"
+          if [ "$VERSION" != "1.7.4" ]; then
+            echo "FAIL: expected version-semver '1.7.4', got '$VERSION'"
+            exit 1
+          fi
+          echo "PASS: version-semver=1.7.4"
+
+      - name: Assert version-tag matches requested version
+        env:
+          TAG: ${{ steps.action.outputs.version-tag }}
+        run: |
+          echo "version-tag: $TAG"
+          if [ "$TAG" != "v1.7.4" ]; then
+            echo "FAIL: expected version-tag 'v1.7.4', got '$TAG'"
+            exit 1
+          fi
+          echo "PASS: version-tag=v1.7.4"
+
+      - name: Assert exit-code is 0
+        env:
+          EXIT_CODE: ${{ steps.action.outputs.exit-code }}
+        run: |
+          echo "exit-code: $EXIT_CODE"
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "FAIL: expected exit-code 0, got $EXIT_CODE"
+            exit 1
+          fi
+          echo "PASS: exit-code=0"

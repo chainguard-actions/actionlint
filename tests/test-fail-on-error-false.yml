@@ -1,0 +1,49 @@
+name: Test fail-on-error false with invalid workflow
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          shellcheck: "false"
+          pyflakes: "false"
+          fail-on-error: "false"
+          files: "tests/fixtures/workflows/invalid.yml"
+
+      - name: Assert step succeeded despite errors (fail-on-error is false)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" != "success" ]; then
+            echo "FAIL: expected step to succeed when fail-on-error=false, got $OUTCOME"
+            exit 1
+          fi
+          echo "PASS: step succeeded as expected"
+
+      - name: Assert exit-code is non-zero (errors found)
+        env:
+          EXIT_CODE: ${{ steps.action.outputs.exit-code }}
+        run: |
+          echo "exit-code: $EXIT_CODE"
+          if [ "$EXIT_CODE" = "0" ]; then
+            echo "FAIL: expected non-zero exit-code for invalid workflow, got 0"
+            exit 1
+          fi
+          echo "PASS: exit-code=$EXIT_CODE (non-zero as expected)"
+
+      - name: Assert exit-message is set
+        env:
+          EXIT_MSG: ${{ steps.action.outputs.exit-message }}
+        run: |
+          echo "exit-message: $EXIT_MSG"
+          if [ -z "$EXIT_MSG" ]; then
+            echo "FAIL: exit-message output is empty"
+            exit 1
+          fi
+          echo "PASS: exit-message=$EXIT_MSG"

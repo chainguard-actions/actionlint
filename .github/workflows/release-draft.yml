@@ -1,0 +1,16 @@
+---
+name: Draft Release
+
+on: # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - main
+
+jobs:
+  draft-release:
+    name: Draft Release
+    uses: raven-actions/.workflows/.github/workflows/__release-draft.yml@1f992c9cb996a0672a65cf952ff539a870389b56 # main
+    permissions:
+      contents: write
+      pull-requests: read
+    secrets: inherit

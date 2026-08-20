@@ -1,0 +1,12 @@
+name: Invalid Workflow
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bad step one
+        run: echo hello
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Bad step two
+        run: echo world
+        uses: actions/setup-node@de0fac2e4500dabe0009e67214ff5f5447ce83dd

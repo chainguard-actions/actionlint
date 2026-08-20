@@ -1,0 +1,127 @@
+---
+name: CI
+
+on: # yamllint disable-line rule:truthy
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      debug:
+        type: choice
+        description: Debug mode
+        required: false
+        options:
+          - "true"
+          - "false"
+
+# Allow one concurrent
+concurrency:
+  group: ${{ format('{0}-{1}-{2}-{3}-{4}', github.workflow, github.event_name, github.ref, github.base_ref, github.head_ref) }}
+  cancel-in-progress: true
+
+permissions: {}
+
+env:
+  DEBUG: ${{ inputs.debug || secrets.ACTIONS_RUNNER_DEBUG || vars.ACTIONS_RUNNER_DEBUG || secrets.ACTIONS_STEP_DEBUG || vars.ACTIONS_STEP_DEBUG || false }}
+
+jobs:
+  dog-food:
+    name: Dog food (test inputs)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Debug
+        uses: raven-actions/debug@9dbdeb7eea607a7d73411895c65987e71d59a466 # v1.2.0
+        with:
+          vars-context: ${{ toJson(vars) }}
+          secrets-context: ${{ toJson(secrets) }}
+          needs-context: ${{ toJson(needs) }}
+          inputs-context: ${{ toJson(inputs) }}
+
+      - name: actionlint Action (old version)
+        uses: ./
+        with:
+          version: "1.6.23"
+          shellcheck: false
+          pyflakes: false
+          files: "tests/fixtures/*.yml, tests/fixtures/*.yaml"
+          flags: "-ignore SC2086"
+          fail-on-error: false
+
+      - name: actionlint Action (test broken)
+        id: actionlint
+        uses: ./
+        with:
+          files: "tests/fixtures/*.yml, tests/fixtures/*.yaml"
+          flags: "-ignore SC2086"
+          fail-on-error: false
+          group-result: false
+
+      - name: actionlint Outputs
+        if: ${{ steps.actionlint.outputs.exit-code != '0' }}
+        env:
+          ACTIONLINT_VERSION_SEMVER: ${{ steps.actionlint.outputs.version-semver }}
+          ACTIONLINT_VERSION_TAG: ${{ steps.actionlint.outputs.version-tag }}
+          ACTIONLINT_EXIT_CODE: ${{ steps.actionlint.outputs.exit-code }}
+          ACTIONLINT_EXIT_MESSAGE: ${{ steps.actionlint.outputs.exit-message }}
+          ACTIONLINT_TOTAL_ERRORS: ${{ steps.actionlint.outputs.total-errors }}
+          ACTIONLINT_TOTAL_FILES: ${{ steps.actionlint.outputs.total-files }}
+          ACTIONLINT_CACHE_HIT: ${{ steps.actionlint.outputs.cache-hit }}
+        run: |
+          echo "Used actionlint version $ACTIONLINT_VERSION_SEMVER"
+          echo "Used actionlint release $ACTIONLINT_VERSION_TAG"
+          echo "actionlint ended with $ACTIONLINT_EXIT_CODE exit code"
+          echo "actionlint ended because '$ACTIONLINT_EXIT_MESSAGE'"
+          echo "actionlint found $ACTIONLINT_TOTAL_ERRORS errors"
+          echo "actionlint checked $ACTIONLINT_TOTAL_FILES files"
+          echo "actionlint cache used: $ACTIONLINT_CACHE_HIT"
+
+  dog-food-matrix:
+    name: Dog food (test runners)
+    needs:
+      - dog-food
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: actionlint Action
+        id: actionlint
+        uses: ./
+        with:
+          flags: "-ignore SC2086"
+          fail-on-error: false
+
+      - name: actionlint Outputs
+        if: ${{ always() }}
+        env:
+          ACTIONLINT_VERSION_SEMVER: ${{ steps.actionlint.outputs.version-semver }}
+          ACTIONLINT_VERSION_TAG: ${{ steps.actionlint.outputs.version-tag }}
+          ACTIONLINT_EXIT_CODE: ${{ steps.actionlint.outputs.exit-code }}
+          ACTIONLINT_EXIT_MESSAGE: ${{ steps.actionlint.outputs.exit-message }}
+          ACTIONLINT_TOTAL_ERRORS: ${{ steps.actionlint.outputs.total-errors }}
+          ACTIONLINT_TOTAL_FILES: ${{ steps.actionlint.outputs.total-files }}
+          ACTIONLINT_CACHE_HIT: ${{ steps.actionlint.outputs.cache-hit }}
+        run: |
+          echo "Used actionlint version $ACTIONLINT_VERSION_SEMVER"
+          echo "Used actionlint release $ACTIONLINT_VERSION_TAG"
+          echo "actionlint ended with $ACTIONLINT_EXIT_CODE exit code"
+          echo "actionlint ended because '$ACTIONLINT_EXIT_MESSAGE'"
+          echo "actionlint found $ACTIONLINT_TOTAL_ERRORS errors"
+          echo "actionlint checked $ACTIONLINT_TOTAL_FILES files"
+          echo "actionlint cache used: $ACTIONLINT_CACHE_HIT"
+          # shellcheck disable=SC2242
+          exit "$ACTIONLINT_EXIT_CODE"

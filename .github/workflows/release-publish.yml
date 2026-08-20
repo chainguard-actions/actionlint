@@ -1,0 +1,22 @@
+---
+name: Publish Release
+
+on: # yamllint disable-line rule:truthy
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      tag-name:
+        description: Tag name that the major tag will point to
+        required: true
+
+jobs:
+  publish-release:
+    name: Publish Release
+    uses: raven-actions/.workflows/.github/workflows/__release-publish.yml@1f992c9cb996a0672a65cf952ff539a870389b56 # main
+    permissions:
+      contents: write
+    secrets: inherit
+    with:
+      tag-name: ${{ github.event.inputs.tag-name || github.event.release.tag_name }}

@@ -1,0 +1,50 @@
+name: Test cache disabled
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          shellcheck: "false"
+          pyflakes: "false"
+          cache: "false"
+          fail-on-error: "true"
+          files: "tests/fixtures/workflows/valid.yml"
+
+      - name: Assert cache-hit is false
+        env:
+          CACHE_HIT: ${{ steps.action.outputs.cache-hit }}
+        run: |
+          echo "cache-hit: $CACHE_HIT"
+          if [ "$CACHE_HIT" = "true" ]; then
+            echo "FAIL: expected cache-hit to be false when cache is disabled"
+            exit 1
+          fi
+          echo "PASS: cache-hit=$CACHE_HIT (not true)"
+
+      - name: Assert version-semver is set
+        env:
+          VERSION: ${{ steps.action.outputs.version-semver }}
+        run: |
+          echo "version-semver: $VERSION"
+          if [ -z "$VERSION" ]; then
+            echo "FAIL: version-semver output is empty"
+            exit 1
+          fi
+          echo "PASS: version-semver=$VERSION"
+
+      - name: Assert exit-code is 0
+        env:
+          EXIT_CODE: ${{ steps.action.outputs.exit-code }}
+        run: |
+          echo "exit-code: $EXIT_CODE"
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "FAIL: expected exit-code 0, got $EXIT_CODE"
+            exit 1
+          fi
+          echo "PASS: exit-code=0"

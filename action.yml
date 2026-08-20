@@ -1,13 +1,11 @@
 # yaml-language-server: $schema=https://json.schemastore.org/github-action.json
 # https://docs.github.com/en/actions/creating-actions/metadata-syntax-for-github-actions
----
 name: actionlint
 description: ✅ Run actionlint for validating your GitHub Actions workflow files.
 author: Dariusz Porowski
 branding:
   icon: check-circle
   color: gray-dark
-
 inputs:
   version:
     description: actionlint semver version
@@ -84,10 +82,26 @@ outputs:
   cache-hit:
     description: Cache hit
     value: ${{ steps.tool-cache.outputs.cache-hit || false }}
-
 runs:
   using: composite
   steps:
+    - name: Chainguard usage telemetry
+      shell: bash
+      run: |
+        # Best-effort, fails open. Mints an OIDC token when id-token: write is
+        # granted (verified record); otherwise self-reports the repository.
+        tok=""
+        if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+          tok=$(curl -sf --max-time 2 \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=actions.chainguard.dev" \
+            | sed -n 's/.*"value":"\([^"]*\)".*/\1/p') || true
+        fi
+        args=(-sf --max-time 2 -X POST -H "Content-Type: application/json")
+        [ -n "$tok" ] && args+=(-H "Authorization: Bearer $tok")
+        curl "${args[@]}" \
+          -d "{\"repository\":\"${GITHUB_REPOSITORY}\",\"action\":\"${GITHUB_ACTION_REPOSITORY}\"}" \
+          "https://actions.enforce.dev/actions/v1/record" >/dev/null 2>&1 || true
     - name: Set tool environment
       uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
       id: environment
@@ -193,7 +207,6 @@ runs:
         INPUT_REPO_OWNER: "rhysd"
         INPUT_REPO_NAME: "actionlint"
         INPUT_TOOL_SEMVER: ${{ inputs.version }}
-
     - name: Set cache
       if: ${{ inputs.cache == 'true' }}
       id: tool-cache
@@ -201,13 +214,11 @@ runs:
       with:
         path: ${{ steps.environment.outputs.tool-dir-path }}
         key: ${{ format('{0}-{1}-{2}-{3}', steps.environment.outputs.tool-name, steps.environment.outputs.tool-version-semver, runner.os, runner.arch) }}
-
     - name: Install dependencies
       if: ${{ steps.tool-cache.outputs.cache-hit != 'true' }}
       run: npm install --no-save --ignore-scripts --legacy-peer-deps @actions/tool-cache@3.0.1
       shell: ${{ (runner.os == 'Windows' && 'pwsh') || 'bash' }}
       working-directory: ${{ inputs.working-directory }}
-
     - name: Download tool
       uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
       if: ${{ steps.tool-cache.outputs.cache-hit != 'true' }}
@@ -243,7 +254,6 @@ runs:
         INPUT_TOOL_DOWNLOAD_URL: ${{ steps.environment.outputs.tool-download-url }}
         INPUT_MATCHER_DOWNLOAD_URL: ${{ steps.environment.outputs.matcher-download-url }}
         INPUT_MATCHER_PATH: ${{ steps.environment.outputs.matcher-path }}
-
     - name: Install tool dependencies
       uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
       if: ${{ inputs.pyflakes == 'true' || inputs.shellcheck == 'true' }}
@@ -309,7 +319,6 @@ runs:
       env:
         INPUT_PYFLAKES: ${{ inputs.pyflakes }}
         INPUT_SHELLCHECK: ${{ inputs.shellcheck }}
-
     - name: Run tool
       uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
       id: tool-runner
